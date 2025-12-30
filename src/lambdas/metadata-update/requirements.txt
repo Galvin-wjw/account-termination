@@ -1,0 +1,9 @@
+# AWS Account Termination - Metadata Update Lambda Dependencies
+# Optimized for Python 3.12 runtime
+
+# AWS SDK - Use the latest version for better performance and security
+boto3>=1.34.0
+botocore>=1.34.0
+
+# Type hints support
+typing-extensions>=4.8.0
