@@ -9,7 +9,14 @@ describe('AccountTerminationStack', () => {
 
   beforeEach(() => {
     app = new cdk.App();
-    stack = new AccountTerminationStack(app, 'TestStack');
+    stack = new AccountTerminationStack(app, 'TestStack', {
+      env: {
+        account: '123456789012',
+        region: 'us-east-1'
+      },
+      vpcId: 'vpc-12345678',
+      dynamoDbTableName: 'test-account-metadata'
+    });
     template = Template.fromStack(stack);
   });
 
@@ -93,53 +100,27 @@ describe('AccountTerminationStack', () => {
   });
 
   describe('VPC Configuration', () => {
-    it('should create VPC with correct configuration', () => {
-      template.hasResourceProperties('AWS::EC2::VPC', {
-        CidrBlock: '10.0.0.0/16',
-        EnableDnsHostnames: true,
-        EnableDnsSupport: true
-      });
-    });
-
-    it('should create private subnets for Lambda functions', () => {
-      template.resourceCountIs('AWS::EC2::Subnet', 4); // 2 public + 2 private
+    it('should use existing VPC', () => {
+      // VPC should be looked up, not created
+      template.resourceCountIs('AWS::EC2::VPC', 0);
     });
 
     it('should create NAT gateway for private subnet internet access', () => {
-      template.resourceCountIs('AWS::EC2::NatGateway', 2); // Production uses 2 NAT gateways
+      // NAT gateways are not created when using existing VPC
+      template.resourceCountIs('AWS::EC2::NatGateway', 0);
     });
   });
 
   describe('DynamoDB Table', () => {
-    it('should create DynamoDB table with correct configuration', () => {
-      template.hasResourceProperties('AWS::DynamoDB::Table', {
-        TableName: 'AccountTermination-Metadata-prod',
-        BillingMode: 'PAY_PER_REQUEST',
-        SSESpecification: {
-          SSEEnabled: true
-        },
-        PointInTimeRecoverySpecification: {
-          PointInTimeRecoveryEnabled: true
-        }
-      });
-    });
-
-    it('should create Global Secondary Index for status queries', () => {
-      template.hasResourceProperties('AWS::DynamoDB::Table', {
-        GlobalSecondaryIndexes: [{
-          IndexName: 'StatusIndex',
-          KeySchema: [
-            { AttributeName: 'status', KeyType: 'HASH' },
-            { AttributeName: 'terminationInitiated', KeyType: 'RANGE' }
-          ]
-        }]
-      });
+    it('should use existing DynamoDB table', () => {
+      // DynamoDB table should not be created, using existing one
+      template.resourceCountIs('AWS::DynamoDB::Table', 0);
     });
   });
 
   describe('Security Groups', () => {
     it('should create security groups for each Lambda function', () => {
-      template.resourceCountIs('AWS::EC2::SecurityGroup', 4); // 4 Lambda SGs (no default VPC SG counted)
+      template.resourceCountIs('AWS::EC2::SecurityGroup', 4); // 4 Lambda SGs
     });
 
     it('should configure restrictive security group for Metadata Update Lambda', () => {
@@ -158,8 +139,8 @@ describe('AccountTerminationStack', () => {
 
   describe('IAM Roles and Policies', () => {
     it('should create IAM roles for all Lambda functions', () => {
-      // Count IAM roles: 4 Lambda roles + 1 Step Functions role + 1 Management Account role
-      template.resourceCountIs('AWS::IAM::Role', 6);
+      // Count IAM roles: 4 Lambda roles + 1 Step Functions role (no VPC flow logs role)
+      template.resourceCountIs('AWS::IAM::Role', 5);
     });
 
     it('should configure least privilege permissions for Pre-Check Lambda', () => {

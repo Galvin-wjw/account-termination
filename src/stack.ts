@@ -14,8 +14,9 @@ import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { Construct } from 'constructs';
 
 export interface AccountTerminationStackProps extends cdk.StackProps {
-  readonly vpcId?: string;
+  readonly vpcId: string; // Required - use existing VPC
   readonly privateSubnetIds?: string[];
+  readonly dynamoDbTableName: string; // Required - use existing DynamoDB table
   readonly managementAccountRoleArn?: string;
   readonly suspendedOuId?: string;
   readonly notificationEmail?: string;
@@ -25,18 +26,15 @@ export interface AccountTerminationStackProps extends cdk.StackProps {
 export class AccountTerminationStack extends cdk.Stack {
   public readonly stateMachine: stepfunctions.StateMachine;
   public readonly vpc: ec2.IVpc;
-  public readonly metadataTable: dynamodb.Table;
 
-  constructor(scope: Construct, id: string, props: AccountTerminationStackProps = {}) {
+  constructor(scope: Construct, id: string, props: AccountTerminationStackProps) {
     super(scope, id, props);
 
     const environment = props.environment || 'prod';
     const isProduction = environment === 'prod';
 
-    // VPC Configuration - Use existing VPC if provided, otherwise create new one
-    this.vpc = props.vpcId 
-      ? ec2.Vpc.fromLookup(this, 'ExistingVPC', { vpcId: props.vpcId })
-      : this.createVPC(isProduction);
+    // Use existing VPC (required)
+    this.vpc = ec2.Vpc.fromLookup(this, 'ExistingVPC', { vpcId: props.vpcId });
 
     // SNS Topic for notifications
     const notificationTopic = new sns.Topic(this, 'NotificationTopic', {
@@ -51,11 +49,15 @@ export class AccountTerminationStack extends cdk.Stack {
       );
     }
 
-    // DynamoDB table for account metadata
-    this.metadataTable = this.createMetadataTable(environment, isProduction);
+    // Use existing DynamoDB table
+    const existingTable = dynamodb.Table.fromTableName(
+      this, 
+      'ExistingMetadataTable', 
+      props.dynamoDbTableName
+    );
 
     // Lambda functions
-    const lambdaFunctions = this.createLambdaFunctions(environment, props);
+    const lambdaFunctions = this.createLambdaFunctions(environment, props, existingTable);
 
     // Step Functions state machine
     this.stateMachine = this.createStateMachine(
@@ -69,73 +71,13 @@ export class AccountTerminationStack extends cdk.Stack {
     this.createCloudWatchAlarms(lambdaFunctions, this.stateMachine, notificationTopic);
 
     // Outputs
-    this.createOutputs(lambdaFunctions, this.stateMachine, this.metadataTable);
+    this.createOutputs(lambdaFunctions, this.stateMachine, existingTable);
 
     // Tags
     this.addTags(environment);
   }
 
-  private createVPC(isProduction: boolean): ec2.Vpc {
-    return new ec2.Vpc(this, 'AccountTerminationVPC', {
-      maxAzs: isProduction ? 3 : 2,
-      natGateways: isProduction ? 2 : 1,
-      subnetConfiguration: [
-        {
-          cidrMask: 24,
-          name: 'Public',
-          subnetType: ec2.SubnetType.PUBLIC,
-        },
-        {
-          cidrMask: 24,
-          name: 'Private',
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-        }
-      ],
-      enableDnsHostnames: true,
-      enableDnsSupport: true,
-      flowLogs: {
-        'CloudWatchLogs': {
-          destination: ec2.FlowLogDestination.toCloudWatchLogs(),
-          trafficType: ec2.FlowLogTrafficType.REJECT
-        }
-      }
-    });
-  }
-
-  private createMetadataTable(environment: string, isProduction: boolean): dynamodb.Table {
-    const table = new dynamodb.Table(this, 'AccountMetadataTable', {
-      tableName: `AccountTermination-Metadata-${environment}`,
-      partitionKey: {
-        name: 'accountId',
-        type: dynamodb.AttributeType.STRING
-      },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      pointInTimeRecoverySpecification: {
-        pointInTimeRecoveryEnabled: isProduction
-      },
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
-      deletionProtection: isProduction
-    });
-
-    // Add GSI for querying by status
-    table.addGlobalSecondaryIndex({
-      indexName: 'StatusIndex',
-      partitionKey: {
-        name: 'status',
-        type: dynamodb.AttributeType.STRING
-      },
-      sortKey: {
-        name: 'terminationInitiated',
-        type: dynamodb.AttributeType.STRING
-      }
-    });
-
-    return table;
-  }
-
-  private createLambdaFunctions(environment: string, props: AccountTerminationStackProps) {
+  private createLambdaFunctions(environment: string, props: AccountTerminationStackProps, existingTable: dynamodb.ITable) {
     const commonEnvironment = {
       LOG_LEVEL: environment === 'prod' ? 'INFO' : 'DEBUG',
       ENVIRONMENT: environment
@@ -193,14 +135,14 @@ export class AccountTerminationStack extends cdk.Stack {
       memorySize: 256,
       environment: {
         ...commonEnvironment,
-        DYNAMODB_TABLE_NAME: this.metadataTable.tableName
+        DYNAMODB_TABLE_NAME: existingTable.tableName
       },
       description: 'Lambda function for updating account termination metadata in DynamoDB',
       policies: [
         new iam.PolicyStatement({
           effect: iam.Effect.ALLOW,
           actions: ['dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:GetItem'],
-          resources: [this.metadataTable.tableArn, `${this.metadataTable.tableArn}/index/*`]
+          resources: [existingTable.tableArn, `${existingTable.tableArn}/index/*`]
         })
       ],
       restrictedNetworking: true
@@ -535,7 +477,7 @@ export class AccountTerminationStack extends cdk.Stack {
     }).addAlarmAction(new cloudwatchActions.SnsAction(notificationTopic));
   }
 
-  private createOutputs(lambdaFunctions: any, stateMachine: stepfunctions.StateMachine, metadataTable: dynamodb.Table) {
+  private createOutputs(lambdaFunctions: any, stateMachine: stepfunctions.StateMachine, existingTable: dynamodb.ITable) {
     // Step Functions ARN
     new cdk.CfnOutput(this, 'StepFunctionsArn', {
       value: stateMachine.stateMachineArn,
@@ -554,13 +496,13 @@ export class AccountTerminationStack extends cdk.Stack {
 
     // DynamoDB table information
     new cdk.CfnOutput(this, 'MetadataTableName', {
-      value: metadataTable.tableName,
+      value: existingTable.tableName,
       description: 'Name of the Account Metadata DynamoDB table',
       exportName: `AccountTermination-Metadata-Table-Name-${this.stackName}`
     });
 
     new cdk.CfnOutput(this, 'MetadataTableArn', {
-      value: metadataTable.tableArn,
+      value: existingTable.tableArn,
       description: 'ARN of the Account Metadata DynamoDB table',
       exportName: `AccountTermination-Metadata-Table-Arn-${this.stackName}`
     });

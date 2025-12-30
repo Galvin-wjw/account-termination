@@ -10,12 +10,10 @@ import {
   AccountManagementOutput,
   MetadataUpdateInput,
   MetadataUpdateOutput,
-  DecommissionInput,
   DecommissionOutput,
-  ExecutionContext,
   AccountMetadata,
   TerminationError
-} from '../src/interfaces';
+} from '../src/config';
 
 describe('Interface Type Validation', () => {
   describe('PreCheck Interfaces', () => {

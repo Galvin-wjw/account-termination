@@ -1,9 +1,104 @@
-import { AwsServiceConfig, VpcConfig } from './interfaces';
-
 /**
- * AWS Service Configuration Utilities
- * Centralized configuration management for AWS services
+ * AWS Account Termination Configuration
+ * Centralized configuration management with environment variable support
  */
+
+// Configuration Interfaces
+export interface VpcConfig {
+  vpcId: string;
+  privateSubnetIds: string[];
+  securityGroupIds: string[];
+  natGatewayId?: string;
+}
+
+export interface AwsServiceConfig {
+  region: string;
+  managementAccountRoleArn: string;
+  suspendedOuId: string;
+  dynamoDbTableName: string;
+}
+
+// Lambda Function Interfaces (for testing)
+export interface PreCheckInput {
+  accountId: string;
+}
+
+export interface PreCheckOutput {
+  accountId: string;
+  safeToTerminate: boolean;
+  resourcesFound: {
+    ebsVolumes: number;
+    rdsInstances: number;
+  };
+  timestamp: string;
+}
+
+export interface AccountManagementInput {
+  accountId: string;
+}
+
+export interface AccountManagementOutput {
+  accountId: string;
+  suspended: boolean;
+  closureInitiated: boolean;
+  organizationalUnit: string;
+  timestamp: string;
+}
+
+export interface MetadataUpdateInput {
+  accountId: string;
+  terminationStatus: string;
+  executionArn: string;
+}
+
+export interface MetadataUpdateOutput {
+  accountId: string;
+  recordUpdated: boolean;
+  timestamp: string;
+}
+
+export interface DecommissionOutput {
+  accountId: string;
+  vendorsProcessed: string[];
+  results: {
+    [vendor: string]: {
+      success: boolean;
+      message: string;
+    };
+  };
+  timestamp: string;
+}
+
+export interface AccountMetadata {
+  accountId: string;
+  status: 'ACTIVE' | 'TERMINATING' | 'TERMINATED' | 'FAILED';
+  terminationInitiated: string;
+  terminationCompleted?: string;
+  executionArn: string;
+  preCheckResults: {
+    ebsVolumes: number;
+    rdsInstances: number;
+    safeToTerminate: boolean;
+  };
+  organizationalUnit: string;
+  vendorDecommissionResults: {
+    [vendor: string]: {
+      success: boolean;
+      message: string;
+      timestamp: string;
+    };
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TerminationError {
+  code: string;
+  message: string;
+  details?: any;
+  timestamp: string;
+  stage: string;
+}
 
 export class AwsConfigManager {
   private static instance: AwsConfigManager;
